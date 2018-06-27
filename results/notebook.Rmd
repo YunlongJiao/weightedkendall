@@ -1,0 +1,169 @@
+---
+title: "The Weighted Kendall Kernel for Permutations"
+author: "Yunlong Jiao"
+date: "June 12, 2018"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    fig_width: 20
+    fig_height: 15
+    code_folding: hide
+    theme: cerulean
+    df_print: kable
+  github_document:
+    toc: true
+    toc_depth: 2
+---
+
+This notebook reproduces experiments of the paper:
+
+> Yunlong Jiao, Jean-Philippe Vert. "The Weighted Kendall and High-order Kernels for Permutations." arXiv preprint arXiv:1802.08526, 2018. [arXiv:1802.08526](https://arxiv.org/abs/1802.08526)
+
+```{r setup, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(error = FALSE, warning = FALSE, message = FALSE)
+options(stringsAsFactors = FALSE)
+library(kernrank) # for fast kendall and weighted kendall
+library(kernlab) # for svm and various kernels
+library(ggplot2) # for general plots
+library(corrplot) # for corr and heatmap plots
+Rcpp::sourceCpp("../src/dots.cpp") # some dot functions
+source("../R/func.R")
+set.seed(70236562)
+```
+
+# I. Eurobarometer (eubm) data and experimental setup
+
+Data are accessed, December 2017, online from the repository of the report:
+
+> T. Christensen. "Eurobarometer 55.2: Science and tech- nology, agriculture, the euro, and internet access, may-june 2001." June, 2010. Cologne, Germany: GESIS/Ann Arbor, MI: Inter-university Consortium for Political and Social Research [distributors], 2010-06-30. [DOI:10.3886/ICPSR03341.v3](https://doi.org/10.3886/ICPSR03341.v3).
+
+As part of the European Union survey Eurobarometer 55.2, participants were asked to rank, according to their opinion, the importance of six sources of information regarding scientific developments: TV, radio, newspapers and magazines, scientific magazines, the internet, school/university. The dataset also includes demographic information of the participants such as gender, nationality or age. The objective of this study is to predict the age group of participants from their ranking of 6 sources of news. Notably, this data was also studied in a similar supervised context in the following paper:
+
+> H. Mania, et al. "On kernel methods for covariates that are rankings." arXiv preprint arXiv:1603.08035v2, 2017. [arXiv:1603.08035v2](https://arxiv.org/abs/1603.08035)
+
+Raw data can be downloaded from the website [DOI:10.3886/ICPSR03341.v3](https://doi.org/10.3886/ICPSR03341.v3) where detailed description of the survey can also be found. Due to data protection policy, here we only provide the script below to process the raw data by anonymizing, randomizing, and subsampling the full dataset. Briefly, we removed all respondents who did not provide a complete ranking over all six sources, leaving a total of 12,216 participants. Then, we split the dataset across age groups, where 5,985 participants were 40 years old or younger, 6,231 were over 40. In order to perform classification, we chose to fit kernel SVMs with different kernels and compare.
+
+```{r eubm}
+# set seed
+set.seed(70236562)
+
+# eubm data
+dname <- "eubm"
+datapath <- paste0("../data/dat_", dname, ".RData")
+
+# parameters to choose
+nrep <- 50
+ntr <- 400
+ntst <- 100
+
+# parameters specific to eubm data
+p <- 6
+ntot <- 12216
+
+# process data
+if (file.exists(datapath)) {
+  dat <- get(load(datapath))
+} else {
+  # read full data
+  d <- read.table("../data/ICPSR_03341/DS0001/03341-0001-Data.tsv", header = TRUE, sep = "\t")
+  
+  # get ranking data from survey no. Q5/V57-62 - x
+  dx <- as.matrix(d[ , paste0("v", 57:62)])
+  stopifnot(ncol(dx) == p)
+  # keep full ranking only
+  id.keep <- apply(dx, 1, function(u) all(sort(u) == seq(p)))
+  stopifnot(sum(id.keep) == ntot)
+  # further process such that larger values indicate higher preference
+  dx <- t(apply(dx[id.keep, ], 1, function(u) return(p+1-u)))
+  stopifnot(nrow(dx) == ntot)
+  colnames(dx) <- c("TV", "RADIO", "NEWSP_MAGAZ", "SC_MAGAZINES", "INTERNET", "SCHOOL_UNIV")
+  rownames(dx) <- paste0("ptcpt", 1:ntot)
+  
+  # get BINARY labels - y
+  dy <- list(
+    # age group from survey no. D11/V522
+    "age" = factor(d[id.keep, "v522", drop=T] > 40, levels = c(TRUE, FALSE), labels = c("G40", "LE40"))
+  )
+  stopifnot(all(sapply(dy, function(u) sum(table(u)) == ntot)))
+  dy <- lapply(dy, function(u){ names(u) <- rownames(dx); return(u) })
+  
+  # create data splits as a list structured as dat$`task`$`rep`$`xtrain, ytrain, xtest, ytest`
+  dat <- lapply(seq(nrep), function(irep){
+    lapply(dy, function(u){
+      stopifnot(length(levels(u)) == 2)
+      stopifnot(all(table(u) > (ntr+ntst)/2))
+      stopifnot(length(u) == ntot)
+      # evenly sample (ntr+ntst)/2 instances per group and get indices
+      idx <- unlist(lapply(split(1:ntot, u), sample, size=(ntr+ntst)/2, replace=F))[sample(ntr+ntst, replace=F)]
+      trainidx <- idx[1:ntr]
+      testidx <- idx[(ntr+1):(ntr+ntst)]
+      list(
+        "trainidx" = trainidx,
+        "testidx" = testidx,
+        "xtrain" = dx[trainidx, , drop=F],
+        "ytrain" = u[trainidx],
+        "xtest" = dx[testidx, , drop=F],
+        "ytest" = u[testidx]
+      )
+    })
+  })
+  names(dat) <- paste0("rep", seq_len(nrep))
+  save(dat, file = datapath) # named just "dat"
+}
+# just to check
+stopifnot(length(dat) == nrep)
+stopifnot(length(dat[[1]][[1]]$ytrain) == ntr)
+stopifnot(length(dat[[1]][[1]]$ytest) == ntst)
+
+# parameters confirmed
+# number of random repeats
+nrep
+
+# binary classification tasks
+tasklist <- names(dat[[1]])
+tasklist
+ntask <- length(tasklist)
+```
+
+Subsampled datasets are provided in `r datapath`. To summarize the preprocessing above,
+
+- First, we extracted information from the `r dname` data, where a total of `r ntot` participants gave full ranks in the order of preference `r p` sources of news regarding scientific developments: TV, radio, newspapers and magazines, scientific magazines, the internet, school/university.
+- Then, we created `r ntask` binary classification task(s) predicting participant's demographic information that is the age group (over or under 40 years old) of the participants.
+- Finally, we randomly generate `r nrep` times train-test splits of data, where for each fold there are `r ntr` training instances vs `r ntst` test instances.
+
+In order to perform classification, we chose to fit kernel SVMs with different kernels and compare. Further, the parameters set to run experiments in `param` as follows:
+
+```{r param}
+# kernels defined in file R/func.R
+# NOTE each kf has to START with ^dot_
+kflist <- ls(pattern = "^dot_")
+# add kendall at pos k ranging from 1 to (p-1)
+key <- "dot_kenat"
+if (key %in% kflist) {
+  kflist <- c(setdiff(kflist, key), paste0(key, seq_len(p-1)))
+}
+# show kflist
+kflist
+
+# parameters set to run experiments
+param <- expand.grid(
+  "dname" = as.character(dname), # data
+  "task" = as.character(tasklist), # binary classification tasks
+  "irep" = as.integer(seq_len(nrep)), # rep idx
+  "kfname" = as.character(kflist), # kernel
+  KEEP.OUT.ATTRS = FALSE, stringsAsFactors = FALSE
+)
+head(param)
+dim(param)
+```
+
+# II. Classification of ranking data
+
+# III. Results
+
+# IV. Session info
+
+```{r session_info}
+devtools::session_info()
+```
