@@ -117,7 +117,6 @@ perfSVM <- function(kfname,
     ## deterministic kernel function
     ##
     
-    message(" Computing kernel matrix ")
     if (grepl("^dot_kenat[0-9]+", kfname)) {
       k <- as.integer(gsub("^[^0-9]+", "", kfname))
       kf <- dot_kenat(k)
@@ -202,22 +201,22 @@ Rmap_wken <- function(x,
   xwken
 }
 
-# RANK-RANK
-# dot_rr in dots.cpp OR worse implemented as follows
-# dot_rr <- function(x, y)
+# # RANK-RANK
+# # dot_rr in dots.cpp OR worse implemented as follows
+# # dot_rr <- function(x, y)
+# # {
+# #   stopifnot(is.vector(x) && is.numeric(x) && 
+# #               is.vector(y) && is.numeric(y) && 
+# #               length(x) == length(y))
+# #   return(crossprod(rank(x), rank(y)))
+# # }
+# map_rr <- function(x)
 # {
-#   stopifnot(is.vector(x) && is.numeric(x) && 
-#               is.vector(y) && is.numeric(y) && 
-#               length(x) == length(y))
-#   return(crossprod(rank(x), rank(y)))
+#   stopifnot(is.matrix(x))
+#   x
 # }
-map_rr <- function(x)
-{
-  stopifnot(is.matrix(x))
-  x
-}
 
-# KENDALL
+# KENDALL, equiv (thus redundant) to kenat(k=1)
 # dot_ken in dots.cpp OR worse implemented as follows
 # dot_ken <- function(x, y)
 # {
@@ -226,13 +225,13 @@ map_rr <- function(x)
 #               length(x) == length(y))
 #   return((cor(x, y, use = "everything", method = "kendall") + 1) / 2 * choose(length(x), 2))
 # }
-map_ken <- function(x)
-{
-  stopifnot(is.matrix(x))
-  u <- rep(1, ncol(x))
-  u <- tcrossprod(u)
-  Rmap_wken(x, u)
-}
+# map_ken <- function(x)
+# {
+#   stopifnot(is.matrix(x))
+#   u <- rep(1, ncol(x))
+#   u <- tcrossprod(u)
+#   Rmap_wken(x, u)
+# }
 
 # WEIGHTED KENDALL WITH ADDITIVE HYPERBOLIC WEIGHTS
 # dot_wken_hb_add in dots.cpp
@@ -302,18 +301,19 @@ map_aken <- function(x)
   do.call("cbind", xatk)/sqrt(ncol(x))
 }
 
-# series of SUQUAN (Kendall) kernels
+# following are series of SUQUAN (Kendall) kernels
 # note that the corresp map functions are nested in the implementation of \code{classifierSUQUAN}
-# SUQUAN of order 1, Alternate Optimization (Le Morvan and Vert, 2017)
-dot_aosq1 <- function(f){
-  # wrapper for Cdot_sq1
-  function(x, y){
-    Cdot_sq1(x, y, f)
-  }
-}
 
-# SUQUAN of order 1, SVD-based algorithm (Le Morvan and Vert, 2017)
-dot_svdsq1 <- dot_aosq1
+# # SUQUAN of order 1, Alternate Optimization (Le Morvan and Vert, 2017)
+# dot_aosq1 <- function(f){
+#   # wrapper for Cdot_sq1
+#   function(x, y){
+#     Cdot_sq1(x, y, f)
+#   }
+# }
+# 
+# # SUQUAN of order 1, SVD-based algorithm (Le Morvan and Vert, 2017)
+# dot_svdsq1 <- dot_aosq1
 
 # SUQUAN of order 2, Alternate Optimization (Jiao and Vert, 2018)
 dot_aosq2 <- function(f){

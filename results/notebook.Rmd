@@ -6,8 +6,6 @@ output:
   html_document:
     toc: true
     toc_depth: 2
-    fig_width: 20
-    fig_height: 15
     code_folding: hide
     theme: cerulean
     df_print: kable
@@ -21,10 +19,12 @@ This notebook reproduces experiments of the paper:
 > Yunlong Jiao, Jean-Philippe Vert. "The Weighted Kendall and High-order Kernels for Permutations." arXiv preprint arXiv:1802.08526, 2018. [arXiv:1802.08526](https://arxiv.org/abs/1802.08526)
 
 ```{r setup, message=FALSE, warning=FALSE}
-knitr::opts_chunk$set(error = FALSE, warning = FALSE, message = FALSE)
+knitr::opts_chunk$set(error = FALSE, warning = FALSE, message = FALSE, 
+                      fig.width = 15, fig.height = 12)
 options(stringsAsFactors = FALSE)
 library(kernrank) # for fast kendall and weighted kendall
 library(kernlab) # for svm and various kernels
+library(caret) # for cv fold splits
 library(ggplot2) # for general plots
 library(corrplot) # for corr and heatmap plots
 Rcpp::sourceCpp("../src/dots.cpp") # some dot functions
@@ -45,12 +45,10 @@ As part of the European Union survey Eurobarometer 55.2, participants were asked
 Raw data can be downloaded from the website [DOI:10.3886/ICPSR03341.v3](https://doi.org/10.3886/ICPSR03341.v3) where detailed description of the survey can also be found. Due to data protection policy, here we only provide the script below to process the raw data by anonymizing, randomizing, and subsampling the full dataset. Briefly, we removed all respondents who did not provide a complete ranking over all six sources, leaving a total of 12,216 participants. Then, we split the dataset across age groups, where 5,985 participants were 40 years old or younger, 6,231 were over 40. In order to perform classification, we chose to fit kernel SVMs with different kernels and compare.
 
 ```{r eubm}
-# set seed
-set.seed(70236562)
-
 # eubm data
 dname <- "eubm"
 datapath <- paste0("../data/dat_", dname, ".RData")
+task <- "age"
 
 # parameters to choose
 nrep <- 50
@@ -66,7 +64,8 @@ if (file.exists(datapath)) {
   dat <- get(load(datapath))
 } else {
   # read full data
-  d <- read.table("../data/ICPSR_03341/DS0001/03341-0001-Data.tsv", header = TRUE, sep = "\t")
+  d <- read.table("../data/ICPSR_03341/DS0001/03341-0001-Data.tsv", 
+                  header = TRUE, sep = "\t")
   
   # get ranking data from survey no. Q5/V57-62 - x
   dx <- as.matrix(d[ , paste0("v", 57:62)])
@@ -83,10 +82,19 @@ if (file.exists(datapath)) {
   # get BINARY labels - y
   dy <- list(
     # age group from survey no. D11/V522
-    "age" = factor(d[id.keep, "v522", drop=T] > 40, levels = c(TRUE, FALSE), labels = c("G40", "LE40"))
+    "age" = factor(d[id.keep, "v522", drop=T] > 40, levels = c(TRUE,FALSE), labels = c("G40","LE40"))
   )
   stopifnot(all(sapply(dy, function(u) sum(table(u)) == ntot)))
   dy <- lapply(dy, function(u){ names(u) <- rownames(dx); return(u) })
+  
+  # save up full data just in case
+  fulldat <- list(
+    "x" = dx,
+    "y" = dy
+  )
+  fulldatapath <- paste0("../data/fulldat_", dname, ".RData")
+  save(fulldat, file = fulldatapath)
+  rm(fulldat)
   
   # create data splits as a list structured as dat$`task`$`rep`$`xtrain, ytrain, xtest, ytest`
   dat <- lapply(seq(nrep), function(irep){
@@ -95,7 +103,8 @@ if (file.exists(datapath)) {
       stopifnot(all(table(u) > (ntr+ntst)/2))
       stopifnot(length(u) == ntot)
       # evenly sample (ntr+ntst)/2 instances per group and get indices
-      idx <- unlist(lapply(split(1:ntot, u), sample, size=(ntr+ntst)/2, replace=F))[sample(ntr+ntst, replace=F)]
+      idx <- unlist(lapply(split(1:ntot, u), sample, 
+                           size=(ntr+ntst)/2, replace=F))[sample(ntr+ntst, replace=F)]
       trainidx <- idx[1:ntr]
       testidx <- idx[(ntr+1):(ntr+ntst)]
       list(
@@ -111,19 +120,16 @@ if (file.exists(datapath)) {
   names(dat) <- paste0("rep", seq_len(nrep))
   save(dat, file = datapath) # named just "dat"
 }
+
+# binary classification tasks
+tasklist <- names(dat[[1]])
+ntask <- length(tasklist)
+
 # just to check
 stopifnot(length(dat) == nrep)
 stopifnot(length(dat[[1]][[1]]$ytrain) == ntr)
 stopifnot(length(dat[[1]][[1]]$ytest) == ntst)
-
-# parameters confirmed
-# number of random repeats
-nrep
-
-# binary classification tasks
-tasklist <- names(dat[[1]])
-tasklist
-ntask <- length(tasklist)
+stopifnot(all(tasklist == task))
 ```
 
 Subsampled datasets are provided in `r datapath`. To summarize the preprocessing above,
@@ -132,9 +138,9 @@ Subsampled datasets are provided in `r datapath`. To summarize the preprocessing
 - Then, we created `r ntask` binary classification task(s) predicting participant's demographic information that is the age group (over or under 40 years old) of the participants.
 - Finally, we randomly generate `r nrep` times train-test splits of data, where for each fold there are `r ntr` training instances vs `r ntst` test instances.
 
-In order to perform classification, we chose to fit kernel SVMs with different kernels and compare. Further, the parameters set to run experiments in `param` as follows:
+In order to perform classification, we chose to fit kernel SVMs with different kernels and compare. Further, the parameters set to run experiments in `parm` as follows:
 
-```{r param}
+```{r parm}
 # kernels defined in file R/func.R
 # NOTE each kf has to START with ^dot_
 kflist <- ls(pattern = "^dot_")
@@ -145,22 +151,224 @@ if (key %in% kflist) {
 }
 # show kflist
 kflist
+# add label or alias for kfname
+labellist <- c(
+  "dot_kenat1" = "standard (or top-6)",
+  "dot_kenat2" = "top-5",
+  "dot_kenat3" = "top-4",
+  "dot_kenat4" = "top-3",
+  "dot_kenat5" = "top-2",
+  "dot_aken" = "average",
+  "dot_wken_hb_add" = "add weight (hb)",
+  "dot_wken_hb_mult" = "mult weight (hb)",
+  "dot_wken_dcg_add" = "add weight (log)",
+  "dot_wken_dcg_mult" = "mult weight (log)",
+  "dot_svdsq2" = "learned weight (svd)",
+  "dot_aosq2" = "learned weight (opt)"
+)
+label.sep <- c(6.5, 10.5) # to separate label in boxplot
+stopifnot(all(kflist %in% names(labellist)))
 
 # parameters set to run experiments
-param <- expand.grid(
-  "dname" = as.character(dname), # data
+dlist <- dname
+parm <- expand.grid(
+  "dname" = as.character(dlist), # data
   "task" = as.character(tasklist), # binary classification tasks
   "irep" = as.integer(seq_len(nrep)), # rep idx
   "kfname" = as.character(kflist), # kernel
   KEEP.OUT.ATTRS = FALSE, stringsAsFactors = FALSE
 )
-head(param)
-dim(param)
+head(parm)
+dim(parm)
 ```
 
 # II. Classification of ranking data
 
+As described in the last section, we perform classification by fitting SVMs with different kernels and compare the classification accuracy on the random train-test splits of the `r dname` data. As the experiment might take long to finish, for ease of rewriting the script to run the experiments on the server in case, code will organized to be easily parallelizable with results being saved locally and later loaded back in.
+
+```{r classify}
+# set path to save Robj
+savepath <- "Robj/"
+if (!dir.exists(savepath))
+  dir.create(savepath)
+
+# run classification and evaluate performance
+scores <- list()
+for (i in seq(nrow(parm))) {
+  message("i = ", i, " out of ", nrow(parm))
+  ags <- as.vector(as.matrix(parm[i, ]))
+  # dname <- as.character(ags[1])
+  # task <- as.character(ags[2])
+  irep <- as.integer(ags[3])
+  kfname <- as.character(ags[4])
+  
+  objname <- paste(c("res", ags), collapse = "_")
+  objpath <- paste0(savepath, objname, ".RData")
+  
+  # classification
+  if (file.exists(objpath)) {
+    res <- get(load(objpath))
+    message(i, '-th job already done !!')
+  } else {
+    # datapath <- paste0("../data/dat_", dname, ".RData")
+    # dat <- get(load(datapath))
+    res <- perfSVM(kfname = kfname, 
+                   xtrain = dat[[irep]][[task]]$xtrain, 
+                   ytrain = dat[[irep]][[task]]$ytrain, 
+                   xtest = dat[[irep]][[task]]$xtest, 
+                   ytest = dat[[irep]][[task]]$ytest)
+    save(res, file = objpath) # named just "res"
+    message(i, '-th job saved up !!')
+  }
+  
+  # evaluation
+  scores[[i]] <- data.frame(
+    ags,
+    "acc" = res$acc,
+    row.names = NULL
+  )
+  rm(res)
+}
+scores <- do.call('rbind', scores)
+rownames(scores) <- seq(nrow(scores))
+scores$label <- labellist[scores$kfname]
+# save up
+write.table(scores, file = "scores.txt", 
+            row.names = TRUE, col.names = TRUE, sep = '\t', quote = TRUE)
+```
+
 # III. Results
+
+```{r prep}
+# read back in scores table
+scores <- read.table("scores.txt")
+scores$label <- ordered(labellist[scores$kfname], levels = labellist)
+head(scores)
+
+# theme for plots
+p.theme <- theme_bw() + 
+  theme(legend.justification = c(1,1), legend.position = c(1,1), 
+        legend.title = element_blank(), 
+        legend.key.size = unit(0.6, "in"), 
+        legend.background = element_rect(alpha("white", 0)), 
+        panel.border = element_rect(colour = "black", size = 1), 
+        text = element_text(size = 32, colour = "black", face = "bold"), 
+        title = element_text(size = 32, colour = "black", face = "bold"), 
+        plot.margin = unit(c(1, 1, 1, 1), "lines"))
+
+# color palette for visualizing learned weights
+cols.weights <- colorRampPalette(c("#BB4444","#EE9988","#FFFFFF","#77AADD","#4477AA"))(200)
+
+# color palette for visualizing p matrix
+cols.pmat <- colorRampPalette(c("#011f4b","#03396c","#005b96","#6497b1","#b3cde0"))(200)
+```
+
+## III.A. Weighted Kendall kernel
+
+Plot of reduction factor in weighted Kendall kernel:
+
+```{r rf}
+N <- 10
+d <- data.frame(
+  "x" = factor(c(1:N, 1:N, 1:N)),
+  "y" = c(rep(1,ceiling(N/2)),rep(0,N-ceiling(N/2)), 1/(1+1:N), 1/log2(1+1:N)),
+  "grp" = c(rep("TOP-K",N), rep("HB",N), rep("LOG",N))
+)
+ggplot(d, aes(x = x, y = y)) + 
+  geom_step(aes(color = grp, group = grp), linetype = 2, size = 1) + 
+  geom_point(aes(color = grp, shape = grp), size = 3, stroke = 2) + 
+  scale_shape(solid = FALSE) + 
+  ylim(0,1) + xlab(expression(i)) + ylab(expression('u'[i])) + 
+  p.theme
+```
+
+## III.B. Classification accuracy
+
+Comparison of classication accuracy of different kernels:
+
+```{r acc}
+# calculate mean and sd of acc per kernel
+ms <- tapply(scores$acc, scores$label[ , drop=T], mean)
+sds <- tapply(scores$acc, scores$label[ , drop=T], sd)
+o <- order(ms, decreasing = TRUE)
+tab <- data.frame("Mean"=ms, "SD"=sds, "p.value"=NA)[o, ]
+# signif test of better-perf kernels
+scores.sp <- split(scores, scores$label, drop = TRUE)
+stopifnot(length(o) == length(scores.sp))
+key <- labellist["dot_kenat1"]
+keyid <- which(rownames(tab) == key)
+pmatrix <- matrix(NA, nrow = length(scores.sp), ncol = length(scores.sp), 
+                  dimnames = list(names(scores.sp),names(scores.sp)))
+pmatrix <- pmatrix[o,o] # reorder by decreasing mean perf
+for (i in 1:(keyid-1)) {
+  si <- scores.sp[[rownames(tab)[i]]]$acc
+  sj <- scores.sp[[rownames(tab)[keyid]]]$acc
+  stopifnot(length(si) == length(sj))
+  tab[i,"p.value"] <- wilcox.test(x = si, y = sj, alternative = "greater", 
+                                  exact = F, mu = 0, paired = T)$p.value
+}
+
+# table
+knitr::kable(round(tab, 4))
+
+# boxplot
+ggplot(scores, aes(x = label, y = acc)) + 
+  geom_boxplot(aes(fill = label), alpha = 0.8, outlier.shape = NA, notch = TRUE) + 
+  geom_vline(xintercept = label.sep, color = "grey", size = 1, linetype = 2) + 
+  labs(x = "type of weighted kernel", y = "accuracy") + 
+  p.theme + 
+  guides(fill = FALSE) + 
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+```
+
+## III.C. SUQUAN-SVD learned weights
+
+Plot of weights in a weighted kernel learned via SUQUAN-SVD (Algorithm 1, Le Morvan and Vert, 2017):
+
+```{r weights}
+weightspath <- "weights.txt"
+if (file.exists(weightspath)) {
+  f <- as.matrix(read.table(weightspath))
+  dimnames(f) <- list(1:p,1:p)
+} else {
+  # Randomly split full data and get SUQUAN-SVD weights
+  fulldatapath <- paste0("../data/fulldat_", dname, ".RData")
+  load(fulldatapath)
+  n <- nrow(fulldat$x)
+  p <- ncol(fulldat$x)
+  
+  set.seed(26121989)
+  foldIndices <- caret::createMultiFolds(1:n, 10, 50)
+  flist <- lapply(foldIndices, function(fold){
+    x <- fulldat$x[fold, , drop=F]
+    y <- fulldat$y[[task]][fold]
+    classes <- levels(factor(y))
+    stopifnot(length(classes) == 2)
+    
+    # c.f. Algorithm 1 of (Le Morvan and Vert, 2017)
+    idx1 <- which(y == classes[1])
+    idx2 <- which(y == classes[2])
+    ybin.lda <- numeric(length(y))
+    ybin.lda[idx1] <- -1/length(idx1)
+    ybin.lda[idx2] <- 1/length(idx2)
+    M <- mlda2(x, ybin.lda)
+    f <- svd(M, nu = 1, nv = 0)$u
+    dim(f) <- c(p, p)
+    f
+  })
+  f <- Reduce('+', flist)/length(flist)
+  
+  # reverse order so that larger values imply smaller rank
+  f <- f[p:1,p:1]
+  dimnames(f) <- list(1:p,1:p)
+  write.table(f, file = weightspath, 
+              row.names = TRUE, col.names = TRUE, sep = '\t', quote = TRUE)
+}
+
+# plot
+corrplot(f, method = "color", col = cols.weights, is.corr = FALSE, cl.pos = "r",
+         addCoef.col = "black", mar = c(0,0,1,0))
+```
 
 # IV. Session info
 

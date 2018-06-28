@@ -6,28 +6,28 @@
 #include <Rcpp.h>
 using namespace Rcpp;
 
-//////////////////////////////////////// order-1
-
-// [[Rcpp::export]]
-double Cdot_sq1(IntegerVector x, IntegerVector y, NumericVector f) {
-  /* suquan-1 */
-  int n = x.size(), i = 0;
-  double total = 0;
-  
-  /* for i */
-  for (i = 0; i < n; ++i) {
-    total += f[x[i] - 1] * f[y[i] - 1] ;
-  }
-  return total;
-}
-
-// [[Rcpp::export]]
-double dot_rr(IntegerVector x, IntegerVector y) {
-  /* rank-rank */
-  IntegerVector t = x * y;
-  double total = sum(t);
-  return total;
-}
+// //////////////////////////////////////// order-1
+// 
+// // [[Rcpp::export]]
+// double Cdot_sq1(IntegerVector x, IntegerVector y, NumericVector f) {
+//   /* suquan-1 */
+//   int n = x.size(), i = 0;
+//   double total = 0;
+//   
+//   /* for i */
+//   for (i = 0; i < n; ++i) {
+//     total += f[x[i] - 1] * f[y[i] - 1] ;
+//   }
+//   return total;
+// }
+// 
+// // [[Rcpp::export]]
+// double dot_rr(IntegerVector x, IntegerVector y) {
+//   /* rank-rank */
+//   IntegerVector t = x * y;
+//   double total = sum(t);
+//   return total;
+// }
 
 //////////////////////////////////////// order-2
 
@@ -46,21 +46,21 @@ double Cdot_sq2(IntegerVector x, IntegerVector y, NumericMatrix f) {
   return total;
 }
 
-// [[Rcpp::export]]
-double dot_ken(IntegerVector x, IntegerVector y) {
-  /* kendall*/
-  int n = x.size(), i = 0, j = 0;
-  double total = 0;
-  
-  /* for i < j */
-  for (i = 0; i < n - 1; ++i) {
-    for (j = i + 1; j < n; ++j) {
-      if ((x[i] < x[j] && y[i] < y[j]) || (x[i] > x[j] && y[i] > y[j]))
-        total += 1;
-    }
-  }
-  return total;
-}
+// // [[Rcpp::export]]
+// double dot_ken(IntegerVector x, IntegerVector y) {
+//   /* kendall*/
+//   int n = x.size(), i = 0, j = 0;
+//   double total = 0;
+//   
+//   /* for i < j */
+//   for (i = 0; i < n - 1; ++i) {
+//     for (j = i + 1; j < n; ++j) {
+//       if ((x[i] < x[j] && y[i] < y[j]) || (x[i] > x[j] && y[i] > y[j]))
+//         total += 1;
+//     }
+//   }
+//   return total;
+// }
 
 // [[Rcpp::export]]
 double Cdot_kenat(IntegerVector x, IntegerVector y, int k) {
